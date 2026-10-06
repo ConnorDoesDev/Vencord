@@ -7,15 +7,17 @@
 import "./settings.css";
 
 import { isPluginEnabled } from "@api/PluginManager";
+import { Button } from "@components/Button";
 import { Divider } from "@components/Divider";
 import { Heading } from "@components/Heading";
 import { resolveError } from "@components/settings/tabs/plugins/components/Common";
 import { debounce } from "@shared/debounce";
 import { classNameFactory } from "@utils/css";
+import { RenderModalProps } from "@vencord/discord-types";
 import { ActivityType } from "@vencord/discord-types/enums";
-import { Select, Text, TextInput, useState } from "@webpack/common";
+import { Modal, openModal, Select, Text, TextInput, useState } from "@webpack/common";
 
-import CustomRPCPlugin, { setRpc, settings, TimestampMode } from ".";
+import CustomRPCPlugin, { RpcConfig, rpcConfigKeys, RpcPreset, setRpc, settings, TimestampMode } from ".";
 
 const cl = classNameFactory("vc-customRPC-settings-");
 
@@ -53,6 +55,105 @@ const updateRPC = debounce(() => {
     setRpc(true);
     if (isPluginEnabled(CustomRPCPlugin.name)) setRpc();
 });
+
+function getConfig(): RpcConfig {
+    return Object.fromEntries(rpcConfigKeys.map(key => [key, settings.store[key]]));
+}
+
+function applyConfig(config: RpcConfig) {
+    Object.assign(settings.store, Object.fromEntries(rpcConfigKeys.map(key => [key, config[key]])));
+}
+
+function updatePresets(update: (presets: RpcPreset[]) => RpcPreset[]) {
+    settings.store.presets = update(settings.store.presets ?? []);
+}
+
+function selectPreset(id: string) {
+    if (!id) {
+        settings.store.activePresetId = undefined;
+        return;
+    }
+
+    const preset = settings.store.presets?.find(p => p.id === id);
+    if (!preset) return;
+
+    applyConfig(preset.config);
+    settings.store.activePresetId = id;
+    updateRPC();
+}
+
+function createPreset(name: string) {
+    const id = crypto.randomUUID();
+    updatePresets(presets => [...presets, { id, name, config: getConfig() }]);
+    settings.store.activePresetId = id;
+}
+
+function renamePreset(id: string, name: string) {
+    updatePresets(presets => presets.map(p => p.id === id ? { ...p, name } : p));
+}
+
+function deletePreset(id: string) {
+    updatePresets(presets => presets.filter(p => p.id !== id));
+    settings.store.activePresetId = undefined;
+}
+
+// Keeps the active preset in sync with every edit made to the fields
+function saveActivePreset() {
+    const { activePresetId } = settings.store;
+    if (!activePresetId) return;
+
+    updatePresets(presets => presets.map(p => p.id === activePresetId ? { ...p, config: getConfig() } : p));
+}
+
+function onConfigChange() {
+    saveActivePreset();
+    updateRPC();
+}
+
+function PresetNameModal({ props, title, initialValue = "", onSubmit }: {
+    props: RenderModalProps;
+    title: string;
+    initialValue?: string;
+    onSubmit(name: string): void;
+}) {
+    const [value, setValue] = useState(initialValue);
+    const name = value.trim();
+
+    function submit() {
+        if (!name) return;
+
+        onSubmit(name);
+        props.onClose();
+    }
+
+    return (
+        <Modal
+            {...props}
+            title={title}
+            actions={[
+                {
+                    text: "Cancel",
+                    variant: "secondary",
+                    onClick: () => props.onClose()
+                },
+                {
+                    text: "Save",
+                    variant: "primary",
+                    onClick: submit
+                }
+            ]}
+        >
+            <Heading tag="h5">Preset name</Heading>
+            <TextInput
+                placeholder="Enter a name"
+                value={value}
+                onChange={setValue}
+                onKeyDown={e => e.key === "Enter" && submit()}
+                autoFocus
+            />
+        </Modal>
+    );
+}
 
 function isStreamLinkDisabled() {
     return settings.store.type !== ActivityType.STREAMING;
@@ -111,7 +212,7 @@ function SingleSetting<T>({ settingsKey, label, disabled, isValid, transform }: 
 
         if (valid === true) {
             settings.store[settingsKey] = newValue;
-            updateRPC();
+            onConfigChange();
         }
     }
 
@@ -141,7 +242,7 @@ function SelectSetting<T>({ settingsKey, label, options, disabled }: SelectOptio
                 closeOnSelect={true}
                 select={v => {
                     settings.store[settingsKey] = v;
-                    updateRPC();
+                    onConfigChange();
                 }}
                 isSelected={v => v === settings.store[settingsKey]}
                 serialize={v => String(v)}
@@ -153,9 +254,63 @@ function SelectSetting<T>({ settingsKey, label, options, disabled }: SelectOptio
 
 export function RPCSettings() {
     const s = settings.use();
+    const presets = s.presets ?? [];
+    const activePreset = presets.find(p => p.id === s.activePresetId);
 
     return (
-        <div className={cl("root")}>
+        // The fields only read their value on mount, so remount them when the preset changes
+        <div className={cl("root")} key={s.activePresetId ?? ""}>
+            <div className={cl("single")}>
+                <Heading tag="h5">Preset</Heading>
+                <Select
+                    placeholder={"No preset"}
+                    options={[
+                        { label: "No preset", value: "" },
+                        ...presets.map(p => ({ label: p.name, value: p.id }))
+                    ]}
+                    maxVisibleItems={5}
+                    closeOnSelect={true}
+                    select={selectPreset}
+                    isSelected={v => v === (s.activePresetId ?? "")}
+                    serialize={v => String(v)}
+                />
+                <div className={cl("preset-actions")}>
+                    <Button
+                        size="small"
+                        onClick={() => openModal(props => (
+                            <PresetNameModal props={props} title="Save as new preset" onSubmit={createPreset} />
+                        ))}
+                    >
+                        Save as new preset
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="small"
+                        disabled={!activePreset}
+                        onClick={() => activePreset && openModal(props => (
+                            <PresetNameModal
+                                props={props}
+                                title="Rename preset"
+                                initialValue={activePreset.name}
+                                onSubmit={name => renamePreset(activePreset.id, name)}
+                            />
+                        ))}
+                    >
+                        Rename
+                    </Button>
+                    <Button
+                        variant="dangerSecondary"
+                        size="small"
+                        disabled={!activePreset}
+                        onClick={() => activePreset && deletePreset(activePreset.id)}
+                    >
+                        Delete
+                    </Button>
+                </div>
+            </div>
+
+            <Divider />
+
             <SelectSetting
                 settingsKey="type"
                 label="Activity Type"

@@ -52,18 +52,7 @@ export const enum TimestampMode {
     CUSTOM,
 }
 
-export const settings = definePluginSettings({
-    enablePresence: {
-        type: OptionType.BOOLEAN,
-        description: "Whether to show the presence",
-        default: true,
-        onChange: v => setRpc(!v)
-    },
-    config: {
-        type: OptionType.COMPONENT,
-        component: RPCSettings
-    },
-}).withPrivateSettings<{
+export interface RpcConfig {
     appID?: string;
     appName?: string;
     details?: string;
@@ -87,6 +76,55 @@ export const settings = definePluginSettings({
     buttonTwoURL?: string;
     partySize?: number;
     partyMaxSize?: number;
+}
+
+export interface RpcPreset {
+    id: string;
+    name: string;
+    config: RpcConfig;
+}
+
+// Every field of RpcConfig, used to copy a config to and from a preset
+export const rpcConfigKeys: (keyof RpcConfig)[] = [
+    "appID",
+    "appName",
+    "details",
+    "detailsURL",
+    "state",
+    "stateURL",
+    "type",
+    "streamLink",
+    "timestampMode",
+    "startTime",
+    "endTime",
+    "imageBig",
+    "imageBigURL",
+    "imageBigTooltip",
+    "imageSmall",
+    "imageSmallURL",
+    "imageSmallTooltip",
+    "buttonOneText",
+    "buttonOneURL",
+    "buttonTwoText",
+    "buttonTwoURL",
+    "partySize",
+    "partyMaxSize"
+];
+
+export const settings = definePluginSettings({
+    enablePresence: {
+        type: OptionType.BOOLEAN,
+        description: "Whether to show the presence",
+        default: true,
+        onChange: v => setRpc(!v)
+    },
+    config: {
+        type: OptionType.COMPONENT,
+        component: RPCSettings
+    },
+}).withPrivateSettings<RpcConfig & {
+    presets?: RpcPreset[];
+    activePresetId?: string;
 }>();
 
 async function createActivity(): Promise<Activity | undefined> {
@@ -260,7 +298,7 @@ export default definePlugin({
 
     settingsAboutComponent: () => {
         const { enablePresence } = settings.use(["enablePresence"]);
-        const [activity] = useAwaiter(createActivity, { fallbackValue: undefined, deps: Object.values(settings.store) });
+        const [activity] = useAwaiter(createActivity, { fallbackValue: undefined, deps: rpcConfigKeys.map(k => settings.store[k]) });
         const gameActivityEnabled = ShowCurrentGame.useSetting();
         const { profileThemeStyle } = useProfileThemeStyle({});
 
